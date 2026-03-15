@@ -1,0 +1,17 @@
+[Unit]
+Description=Nutribot - Asistente Nutricional de Nathalie
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nutribot
+Environment=PATH=/home/ubuntu/nutribot/venv/bin
+ExecStart=/home/ubuntu/nutribot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

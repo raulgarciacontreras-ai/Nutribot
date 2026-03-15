@@ -1,0 +1,9 @@
+.env
+data/chroma/
+data/*.db
+__pycache__/
+*.pyc
+venv/
+*.egg-info/
+registro_calorias.json
+objetivo_calorias.json

@@ -1,0 +1,97 @@
+"""
+RAG con ChromaDB — almacena y busca fragmentos de la guía nutricional.
+Usa sentence-transformers (all-MiniLM-L6-v2) para embeddings locales.
+"""
+import logging
+import os
+import chromadb
+from chromadb.config import Settings as ChromaSettings
+from sentence_transformers import SentenceTransformer
+
+from config import CHROMA_PERSIST_DIR, RAG_TOP_K, EMBED_MODEL
+
+logger = logging.getLogger(__name__)
+
+COLLECTION_NAME = "nutrition_guide"
+
+_embedder = SentenceTransformer(EMBED_MODEL)
+
+
+def _get_client() -> chromadb.ClientAPI:
+    os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+    return chromadb.PersistentClient(
+        path=CHROMA_PERSIST_DIR,
+        settings=ChromaSettings(anonymized_telemetry=False),
+    )
+
+
+def _embed(texts: list[str]) -> list[list[float]]:
+    """Genera embeddings usando sentence-transformers (local, sin API)."""
+    return _embedder.encode(texts, normalize_embeddings=True).tolist()
+
+
+def is_populated() -> bool:
+    """Verifica si ya hay documentos indexados."""
+    try:
+        client = _get_client()
+        col = client.get_collection(COLLECTION_NAME)
+        return col.count() > 0
+    except Exception:
+        return False
+
+
+def get_count() -> int:
+    """Retorna la cantidad de chunks indexados en ChromaDB."""
+    try:
+        client = _get_client()
+        col = client.get_collection(COLLECTION_NAME)
+        return col.count()
+    except Exception:
+        return 0
+
+
+def ingest_chunks(chunks: list[str], metadatas: list[dict] = None):
+    """Indexa chunks en ChromaDB con embeddings de sentence-transformers."""
+    client = _get_client()
+
+    # Eliminar colección existente si hay
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+
+    col = client.create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    batch_size = 50
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i : i + batch_size]
+        ids = [f"chunk_{i + j}" for j in range(len(batch))]
+        metas = metadatas[i : i + batch_size] if metadatas else None
+        embeddings = _embed(batch)
+        col.add(documents=batch, embeddings=embeddings, ids=ids, metadatas=metas)
+
+    logger.info(f"Ingesta completa: {col.count()} chunks con embeddings {EMBED_MODEL}")
+    return col.count()
+
+
+def retrieve(query: str, k: int = None) -> str:
+    """
+    Busca los fragmentos más relevantes para la query.
+    Retorna string concatenado listo para insertar en el prompt.
+    """
+    k = k or RAG_TOP_K
+    try:
+        client = _get_client()
+        col = client.get_collection(COLLECTION_NAME)
+        query_embedding = _embed([query])[0]
+        results = col.query(query_embeddings=[query_embedding], n_results=k)
+
+        docs = results.get("documents", [[]])[0]
+        if not docs:
+            return ""
+        return "\n---\n".join(docs)
+    except Exception:
+        return ""

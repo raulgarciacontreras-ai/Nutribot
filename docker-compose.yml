@@ -1,0 +1,12 @@
+services:
+  nutribot:
+    build: .
+    container_name: nutribot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data          # SQLite + ChromaDB persisten
+      - ./media:/app/media        # Stickers/memes
+      - ./knowledge:/app/knowledge # Guía nutricional (legacy)
+    environment:
+      - TZ=America/Lima

@@ -1,0 +1,386 @@
+========================================================================
+ESTADO ACTUAL DEL PROYECTO NUTRIBOT
+Fecha: 2026-03-14
+========================================================================
+
+1. DESCRIPCION GENERAL
+------------------------------------------------------------------------
+Nutribot es un bot de Telegram con IA para seguimiento nutricional
+personalizado de Nathalie. Usa Gemini 1.5 Flash (gratis) como LLM,
+ChromaDB local como vector store para RAG, SQLite para memoria, y
+APScheduler para recordatorios automaticos.
+
+Identidad:
+  - Nombre del bot: Nutribot (constante BOT_NAME en config.py)
+  - Nombre del usuario: Nathalie (constante NATHALIE_NAME en config.py)
+
+Capacidades:
+  - Conversacion nutricional por texto
+  - Analisis de fotos (refrigerador, platos) con Gemini Vision
+  - RAG sobre guia nutricional personalizada
+  - Recordatorios automaticos en 5 franjas horarias
+  - Memoria conversacional persistente (SQLite)
+  - Sticker/meme al final de cada respuesta segun tono
+
+
+2. ESTRUCTURA DE ARCHIVOS
+------------------------------------------------------------------------
+nathalie-nutrition-bot/
+  .env.example              Plantilla de variables de entorno
+  .gitignore                Excluye .env, data/, __pycache__, venv/
+  config.py                 Configuracion central (env vars + constantes)
+  main.py                   Punto de entrada (polling + scheduler)
+  setup_check.py            6 verificaciones pre-lanzamiento
+  requirements.txt          Dependencias Python
+  Dockerfile                Imagen Docker Python 3.12
+  docker-compose.yml        Compose con volumenes persistentes
+  bot/
+    __init__.py
+    telegram_handler.py     Handlers: /start, /perfil, /help, texto, foto
+  llm/
+    __init__.py
+    gemini_client.py        Cliente Gemini (texto + vision + clasificador de tono)
+  rag/
+    __init__.py
+    vector_store.py         ChromaDB: ingest, retrieve, is_populated, get_count
+  memory/
+    __init__.py
+    store.py                SQLite: perfil, conversacion, meal_log
+  scheduler/
+    __init__.py
+    reminder_scheduler.py   APScheduler con 5 CronTriggers
+  media/
+    __init__.py
+    sticker_picker.py       Seleccion de sticker por tono (6 categorias)
+    stickers/
+      metadata.json         File_ids de Telegram (vacio, por llenar)
+      motivacional/         Carpeta para stickers motivacionales
+      gracioso/             Carpeta para stickers graciosos
+      nutricion/            Carpeta para stickers de nutricion
+      felicitacion/         Carpeta para stickers de felicitacion
+      empujoncito/          Carpeta para stickers de empujoncito
+      default/              Carpeta fallback
+  scripts/
+    ingest_guide.py         Indexa guia nutricional en ChromaDB
+  data/                     (se crea en runtime) SQLite + ChromaDB
+
+
+3. CONTENIDO ACTUAL DE config.py
+------------------------------------------------------------------------
+"""
+Configuracion central -- lee variables de entorno desde .env
+"""
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# -- Identidad
+BOT_NAME = "Nutribot"
+NATHALIE_NAME = "Nathalie"
+
+# -- Telegram
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+NATHALIE_CHAT_ID = int(os.environ["NATHALIE_CHAT_ID"])
+
+# -- Gemini
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+# -- Paths
+NUTRITION_GUIDE_PATH = os.getenv("NUTRITION_GUIDE_PATH", "./data/nutrition_guide.txt")
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "./data/nathalie.db")
+MEDIA_PATH = os.getenv("MEDIA_PATH", "./media/stickers")
+
+# -- RAG
+RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "500"))
+RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "50"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
+
+# -- Conversacion
+CONVERSATION_WINDOW = int(os.getenv("CONVERSATION_WINDOW", "10"))
+
+# -- Scheduler
+TIMEZONE = os.getenv("TIMEZONE", "America/Lima")
+SCHEDULE = {
+    "breakfast": {"hour": 7, "minute": 0},
+    "lunch":     {"hour": 12, "minute": 30},
+    "snack":     {"hour": 18, "minute": 0},
+    "dinner":    {"hour": 20, "minute": 30},
+    "checkin":   {"hour": 21, "minute": 30},
+}
+
+# -- Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+
+4. CONTENIDO ACTUAL DE main.py
+------------------------------------------------------------------------
+"""
+main.py -- Punto de entrada de Nutribot.
+Arranca: Telegram bot (polling) + APScheduler + ingesta inicial de RAG.
+"""
+import asyncio
+import logging
+import os
+
+from telegram.ext import Application
+from config import TELEGRAM_BOT_TOKEN
+from bot.telegram_handler import register_handlers
+from media.sticker_picker import ensure_folders
+from rag.vector_store import is_populated
+from scheduler.reminder_scheduler import setup as setup_scheduler
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+def bootstrap() -> None:
+    os.makedirs("./data", exist_ok=True)
+    ensure_folders()
+    if not is_populated():
+        logger.warning(
+            "ChromaDB vacio. Ejecuta primero: python scripts/ingest_guide.py\n"
+            "El bot funcionara sin RAG hasta que lo hagas."
+        )
+
+async def main() -> None:
+    bootstrap()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    register_handlers(app)
+    scheduler = setup_scheduler(app)
+    scheduler.start()
+    logger.info("Scheduler arrancado con %d jobs", len(scheduler.get_jobs()))
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(allowed_updates=["message"])
+    logger.info("Nutribot arrancado. Esperando mensajes de Nathalie...")
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Apagando...")
+    finally:
+        scheduler.shutdown(wait=False)
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+5. CONTENIDO ACTUAL DE bot/telegram_handler.py
+------------------------------------------------------------------------
+"""
+Telegram Handler -- recibe mensajes y fotos, orquesta la respuesta.
+Es el puente entre Telegram <-> LLM <-> RAG <-> Memory <-> Stickers.
+"""
+import logging
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, ContextTypes, filters,
+)
+from config import NATHALIE_CHAT_ID, BOT_NAME, NATHALIE_NAME
+from memory.store import (
+    save_turn, get_recent_turns, get_profile, update_profile,
+    get_today_meals, log_meal,
+)
+from rag.vector_store import retrieve
+from llm.gemini_client import build_prompt, chat, chat_with_image, classify_tone
+from media.sticker_picker import pick
+
+logger = logging.getLogger(__name__)
+
+def _is_nathalie(update: Update) -> bool:
+    return update.effective_chat.id == NATHALIE_CHAT_ID
+
+--- Comandos ---
+/start  -> Saludo: "Hola {NATHALIE_NAME}! Soy {BOT_NAME}, tu asistente nutricional personal."
+/perfil -> Muestra perfil nutricional de la DB
+/help   -> Lista de capacidades
+
+--- Handlers ---
+handle_text:  texto libre -> RAG retrieve -> build_prompt -> chat -> classify_tone -> pick sticker -> reply
+handle_photo: descarga foto -> RAG retrieve -> build_prompt -> chat_with_image -> classify_tone -> pick sticker -> reply
+
+--- Utilidad ---
+_send_media: envia sticker_id o photo segun lo que devuelva el picker
+register_handlers: registra todos los handlers en la app de Telegram
+
+Flujo completo por mensaje:
+  1. Verificar que es Nathalie (_is_nathalie)
+  2. Guardar turno del usuario (save_turn)
+  3. Buscar contexto RAG relevante (retrieve)
+  4. Armar prompt enriquecido (build_prompt con perfil + comidas de hoy + historial + RAG)
+  5. Llamar a Gemini (chat o chat_with_image)
+  6. Guardar respuesta (save_turn)
+  7. Enviar texto + clasificar tono + enviar sticker
+
+
+6. CONTENIDO ACTUAL DE scheduler/reminder_scheduler.py
+------------------------------------------------------------------------
+"""
+Scheduler -- envia recordatorios proactivos a Nathalie en horarios configurados.
+Usa APScheduler con CronTrigger para cada franja horaria.
+"""
+import logging
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+from config import NATHALIE_CHAT_ID, SCHEDULE, TIMEZONE, NATHALIE_NAME
+from memory.store import save_turn, get_recent_turns, get_profile, get_today_meals
+from rag.vector_store import retrieve
+from llm.gemini_client import build_prompt, chat, classify_tone
+from media.sticker_picker import pick
+
+5 REMINDER_PROMPTS definidos:
+  breakfast -> "Es hora del desayuno. Preguntale a {NATHALIE_NAME}..."
+  lunch     -> "Es hora del almuerzo. Preguntale a {NATHALIE_NAME}..."
+  snack     -> "Es hora de un snack. Recuerdale a {NATHALIE_NAME}..."
+  dinner    -> "Es hora de la cena. Preguntale a {NATHALIE_NAME}..."
+  checkin   -> "Es el check-in nocturno. Preguntale a {NATHALIE_NAME}..."
+
+_send_reminder(bot, meal_key):
+  1. Busca contexto RAG
+  2. Arma prompt con perfil + comidas de hoy + historial
+  3. Llama a Gemini
+  4. Guarda turno como "reminder"
+  5. Envia mensaje + sticker a NATHALIE_CHAT_ID
+
+start_scheduler(bot) -> AsyncIOScheduler:
+  Crea un CronTrigger por cada key en SCHEDULE
+  Retorna el scheduler arrancado
+
+
+7. CONTENIDO ACTUAL DE requirements.txt
+------------------------------------------------------------------------
+python-telegram-bot==21.7
+google-generativeai>=0.8.0
+chromadb>=0.5.0
+Pillow>=10.0
+APScheduler>=3.10
+pytz
+PyMuPDF>=1.24.0
+python-dotenv>=1.0
+
+
+8. OTROS ARCHIVOS CLAVE
+------------------------------------------------------------------------
+
+--- rag/vector_store.py ---
+ChromaDB local con embeddings de Gemini (text-embedding-004, gratis).
+Funciones: is_populated(), get_count(), ingest_chunks(), retrieve()
+Procesa en batches de 50 para respetar limites de API.
+
+--- memory/store.py ---
+SQLite puro (sin ORM). 3 tablas:
+  user_profile:  id, name, weight_kg, height_cm, age, activity, goal, restrictions, symptoms, notes
+  conversation:  id, role, content, msg_type, created_at
+  meal_log:      id, meal_type, description, est_cal, created_at
+Funciones: init_db(), get_profile(), update_profile(), save_turn(), get_recent_turns(),
+           log_meal(), get_today_meals()
+
+--- llm/gemini_client.py ---
+SYSTEM_PROMPT usa BOT_NAME y NATHALIE_NAME de config.
+Reglas clave: nunca sugerir restricciones, celebrar cada comida, cariño sin culpa.
+Funciones: build_prompt(), chat(), chat_with_image(), classify_tone()
+classify_tone usa gemini-1.5-flash para etiquetar el tono en 1 palabra.
+
+--- media/sticker_picker.py ---
+6 categorias: motivacional, gracioso, nutricion, felicitacion, empujoncito, default
+Prioridad: file_id de Telegram > archivo local > fallback a default > fallback global
+Funcion principal: pick(tone) -> {"type": "sticker_id"|"photo"|"none", "value": ...}
+
+--- scripts/ingest_guide.py ---
+Lee guia nutricional (txt/md/pdf), divide en chunks, indexa en ChromaDB.
+Soporta PDF via PyMuPDF.
+
+--- setup_check.py ---
+6 checks automaticos:
+  1. Variables de entorno (.env)
+  2. Token de Telegram (valida con getMe)
+  3. API de Gemini (genera respuesta de prueba)
+  4. ChromaDB local (crea y borra coleccion test)
+  5. Guia nutricional indexada (verifica count > 0)
+  6. Carpetas de stickers (crea si faltan)
+
+
+9. PROBLEMAS CONOCIDOS / INCOMPATIBILIDADES
+------------------------------------------------------------------------
+CRITICO - main.py importa funciones que no existen en los modulos actuales:
+  a) main.py linea 14: "from media.sticker_picker import ensure_folders"
+     -> sticker_picker.py NO tiene funcion ensure_folders()
+     -> Tampoco tiene funcion stats()
+     -> setup_check.py linea 93 tambien importa ensure_folders y stats
+  b) main.py linea 16: "from scheduler.reminder_scheduler import setup as setup_scheduler"
+     -> reminder_scheduler.py exporta start_scheduler(), NO setup()
+  c) setup_check.py linea 83: "from rag.vector_store import is_populated, get_count"
+     -> vector_store.py tiene is_populated() pero NO tiene get_count()
+
+RESUMEN DE FUNCIONES FALTANTES:
+  - media/sticker_picker.py necesita: ensure_folders(), stats()
+  - scheduler/reminder_scheduler.py necesita: setup() (o main.py debe cambiar el import)
+  - rag/vector_store.py necesita: get_count()
+
+NO HAY ERRORES DE RUNTIME aun porque el bot no se ha ejecutado.
+Estos errores se manifestaran como ImportError al arrancar.
+
+
+10. ESTADO DEL .env
+------------------------------------------------------------------------
+El archivo .env NO EXISTE todavia.
+Solo existe .env.example como plantilla.
+
+Variables requeridas (obligatorias):
+  TELEGRAM_BOT_TOKEN    -> NO configurada
+  GEMINI_API_KEY        -> NO configurada
+  NATHALIE_CHAT_ID      -> NO configurada
+
+Variables opcionales (tienen defaults en config.py):
+  GEMINI_MODEL          -> default: gemini-1.5-flash
+  NUTRITION_GUIDE_PATH  -> default: ./data/nutrition_guide.txt
+  CHROMA_PERSIST_DIR    -> default: ./data/chroma_db
+  SQLITE_DB_PATH        -> default: ./data/nathalie.db
+  MEDIA_PATH            -> default: ./media/stickers
+  TIMEZONE              -> default: America/Lima
+  SCHEDULE_BREAKFAST    -> default: 07:00
+  SCHEDULE_LUNCH        -> default: 12:30
+  SCHEDULE_SNACK        -> default: 18:00
+  SCHEDULE_DINNER       -> default: 20:30
+  SCHEDULE_CHECKIN      -> default: 21:30
+  LOG_LEVEL             -> default: INFO
+
+
+11. QUE ESTA LISTO Y QUE FALTA
+------------------------------------------------------------------------
+LISTO:
+  [x] Estructura de carpetas completa
+  [x] config.py con constantes BOT_NAME y NATHALIE_NAME
+  [x] memory/store.py (SQLite completo)
+  [x] rag/vector_store.py (ingest + retrieve)
+  [x] llm/gemini_client.py (texto + vision + classify_tone)
+  [x] media/sticker_picker.py (pick por tono)
+  [x] bot/telegram_handler.py (handlers completos)
+  [x] scheduler/reminder_scheduler.py (5 recordatorios)
+  [x] scripts/ingest_guide.py (ingesta de guia)
+  [x] setup_check.py (6 verificaciones)
+  [x] Dockerfile + docker-compose.yml
+  [x] requirements.txt
+
+PENDIENTE (bugs por corregir antes de arrancar):
+  [ ] Agregar ensure_folders() y stats() a media/sticker_picker.py
+  [ ] Agregar get_count() a rag/vector_store.py
+  [ ] Alinear nombre de funcion: setup() vs start_scheduler() en reminder_scheduler.py
+  [ ] Crear archivo .env con las 3 variables obligatorias
+  [ ] Colocar guia nutricional en data/nutrition_guide.txt
+  [ ] Ejecutar python scripts/ingest_guide.py
+  [ ] Agregar stickers/memes a las carpetas o file_ids a metadata.json
+  [ ] Ejecutar python setup_check.py para validar todo
+  [ ] Primer arranque: python main.py
+
+========================================================================
+FIN DEL RESUMEN
+========================================================================
