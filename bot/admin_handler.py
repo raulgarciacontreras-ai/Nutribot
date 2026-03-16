@@ -41,7 +41,8 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/admin alertas — usuarios con déficit calórico crítico\n"
             "/admin calorias — resumen calórico de todos hoy\n"
             "/admin llm — estado del LLM (primario/fallback)\n"
-            "/admin contexto [nombre] — generar contexto de usuario",
+            "/admin contexto [nombre] — generar contexto de usuario\n"
+            "/admin fix\\_tdee — recalcular TDEE de todos los usuarios",
             parse_mode="Markdown"
         )
         return
@@ -66,6 +67,8 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _cmd_llm_status(update, context)
     elif subcmd == "contexto" and len(args) > 1:
         await _cmd_generar_contexto(update, context, args[1])
+    elif subcmd == "fix_tdee":
+        await _cmd_fix_tdee(update, context)
     else:
         await update.message.reply_text(
             "Comando no reconocido. Usa /admin para ver la lista."
@@ -323,6 +326,65 @@ async def _cmd_generar_contexto(update, context, nombre_buscar: str):
             )
             return
     await update.message.reply_text(f"Usuario '{nombre_buscar}' no encontrado.")
+
+
+async def _cmd_fix_tdee(update, context):
+    """Recalcula TDEE para todos los usuarios usando Mifflin-St Jeor."""
+    from memory.store import update_profile
+
+    chat_ids = get_all_chat_ids()
+    for cid in chat_ids:
+        p = get_profile(cid)
+        try:
+            peso = float(p.get("weight_kg", "0") or "0")
+            altura = float(p.get("height_cm", "0") or "0")
+            edad = float(p.get("age", "0") or "0")
+            if peso == 0 or altura == 0 or edad == 0:
+                await update.message.reply_text(
+                    f"⏭️ {p.get('name', '?')}: datos incompletos, saltando"
+                )
+                continue
+
+            sexo = p.get("sexo", "masculino").lower()
+            if "femen" in sexo or "mujer" in sexo:
+                tmb = 10 * peso + 6.25 * altura - 5 * edad - 161
+                minimo = 1200
+            else:
+                tmb = 10 * peso + 6.25 * altura - 5 * edad + 5
+                minimo = 1500
+
+            actividad = p.get("actividad", "sedentario").lower()
+            factor_map = {
+                "sedentario": 1.2,
+                "ligeramente activo": 1.375,
+                "moderadamente activo": 1.55,
+                "muy activo": 1.725,
+                "extremadamente activo": 1.9,
+            }
+            factor = factor_map.get(actividad, 1.2)
+            tdee_base = tmb * factor
+
+            objetivo = p.get("objetivo", "").lower()
+            if "perder" in objetivo or "bajar" in objetivo:
+                tdee_final = max(tdee_base - 750, minimo)
+            elif "ganar músculo" in objetivo or "ganar musculo" in objetivo:
+                tdee_final = tdee_base + 300
+            elif "ganar peso" in objetivo or "subir" in objetivo:
+                tdee_final = tdee_base + 500
+            else:
+                tdee_final = tdee_base
+
+            tdee_final = max(round(tdee_final), minimo)
+            tdee_final = min(tdee_final, 3500)
+
+            old_tdee = p.get("tdee", "?")
+            update_profile(cid, "tdee", str(tdee_final))
+            await update.message.reply_text(
+                f"✅ {p.get('name')}: TDEE {old_tdee} → {tdee_final} kcal "
+                f"(TMB={round(tmb)} × {factor} = {round(tdee_base)})"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error con {p.get('name', '?')}: {e}")
 
 
 def register_admin_handlers(app):

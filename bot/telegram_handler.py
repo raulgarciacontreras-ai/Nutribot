@@ -801,7 +801,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Detectar si reporta comida y registrarla con CaloCalc
         meal_context = ""
         meal_registrada = False
-        if detectar_reporte_comida(user_text):
+        es_reporte = detectar_reporte_comida(user_text)
+        logger.info("Mensaje: '%s' | Es reporte comida: %s", user_text[:60], es_reporte)
+        if es_reporte:
             resultado = analizar_texto(user_text)
             if resultado["encontro"]:
                 slot = detectar_slot_comida(user_text)

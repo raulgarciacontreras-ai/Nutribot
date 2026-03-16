@@ -361,6 +361,9 @@ REGLA DE TRACKING:
   preguntale que comio exactamente. Ejemplo: 'me toca cenar' -> 'Que vas a cenar {nickname}?'
 - Solo registra cuando confirme que comio exactamente
 - Cuando registres una comida, confirma: 'Registre X kcal. Llevas Y kcal de Z kcal hoy.'
+- Si dice "ya desayune, almorce y cene" sin decir QUE comio en cada una,
+  preguntale UNA comida a la vez. Ejemplo: 'Que desayunaste {nickname}?'
+  Cuando responda, registra esa y pregunta la siguiente.
 
 ALIMENTOS DESCONOCIDOS:
 - Si ves 'COMIDA_PENDIENTE', preguntale que comio exactamente
