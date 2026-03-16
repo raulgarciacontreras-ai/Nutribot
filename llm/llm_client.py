@@ -16,9 +16,7 @@ from google.genai import types
 from openai import OpenAI
 
 from config import (
-    ANTHROPIC_API_KEY, CLAUDE_MODEL,
-    GEMINI_API_KEY, GEMINI_MODEL,
-    GROQ_API_KEY, GROQ_BASE_URL,
+    CLAUDE_MODEL, GEMINI_MODEL,
     GROQ_MODEL, GROQ_VISION_MODEL,
     PRIMARY_LLM, FALLBACK_LLM,
     TIMEZONE,
@@ -29,16 +27,24 @@ from tools.glucocalc_tool import analizar_para_nathalie, FOODS
 
 logger = logging.getLogger(__name__)
 
-# ── Configurar clientes ──────────────────────────────────────────────────────
+# ── Lazy client initialization ───────────────────────────────────────────────
 
-_claude_client = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+def _get_claude_client():
+    from config import ANTHROPIC_API_KEY
+    return _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-_gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-_groq_client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+def _get_gemini_client():
+    from config import GEMINI_API_KEY
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY no configurada")
+    return genai.Client(api_key=GEMINI_API_KEY)
 
-# Backward-compat exports
-_client = _groq_client
+
+def _get_groq_client():
+    from config import GROQ_API_KEY, GROQ_BASE_URL
+    return OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+
 
 TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito", "default"}
 
@@ -47,7 +53,8 @@ TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito",
 
 def embed(text: str) -> list[float]:
     """Genera embeddings usando Gemini text-embedding-004."""
-    result = _gemini_client.models.embed_content(
+    client = _get_gemini_client()
+    result = client.models.embed_content(
         model="text-embedding-004",
         contents=text,
     )
@@ -85,7 +92,8 @@ def _active_llm() -> str:
 # ── Claude calls ─────────────────────────────────────────────────────────────
 
 def _claude_chat(full_prompt: str) -> str:
-    resp = _claude_client.messages.create(
+    client = _get_claude_client()
+    resp = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         messages=[{"role": "user", "content": full_prompt}],
@@ -95,8 +103,9 @@ def _claude_chat(full_prompt: str) -> str:
 
 def _claude_vision(full_prompt: str, image_bytes: bytes,
                    mime_type: str = "image/jpeg") -> str:
+    client = _get_claude_client()
     b64 = base64.b64encode(image_bytes).decode()
-    resp = _claude_client.messages.create(
+    resp = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         messages=[{
@@ -120,7 +129,8 @@ def _claude_vision(full_prompt: str, image_bytes: bytes,
 # ── Gemini calls ─────────────────────────────────────────────────────────────
 
 def _gemini_chat(full_prompt: str) -> str:
-    response = _gemini_client.models.generate_content(
+    client = _get_gemini_client()
+    response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=full_prompt,
     )
@@ -129,8 +139,9 @@ def _gemini_chat(full_prompt: str) -> str:
 
 def _gemini_vision(full_prompt: str, image_bytes: bytes) -> str:
     import PIL.Image
+    client = _get_gemini_client()
     image = PIL.Image.open(io.BytesIO(image_bytes))
-    response = _gemini_client.models.generate_content(
+    response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=[full_prompt, image],
     )
@@ -140,8 +151,9 @@ def _gemini_vision(full_prompt: str, image_bytes: bytes) -> str:
 # ── Groq calls ───────────────────────────────────────────────────────────────
 
 def _groq_chat(full_prompt: str) -> str:
+    client = _get_groq_client()
     messages = [{"role": "user", "content": full_prompt}]
-    resp = _groq_client.chat.completions.create(
+    resp = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=messages,
         max_tokens=512,
@@ -152,6 +164,7 @@ def _groq_chat(full_prompt: str) -> str:
 
 def _groq_vision(full_prompt: str, image_bytes: bytes,
                  mime_type: str = "image/jpeg") -> str:
+    client = _get_groq_client()
     b64 = base64.b64encode(image_bytes).decode()
     messages = [{
         "role": "user",
@@ -161,7 +174,7 @@ def _groq_vision(full_prompt: str, image_bytes: bytes,
              "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
         ],
     }]
-    resp = _groq_client.chat.completions.create(
+    resp = client.chat.completions.create(
         model=GROQ_VISION_MODEL,
         messages=messages,
         max_tokens=512,
