@@ -52,10 +52,10 @@ TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito",
 # ── Embeddings con Gemini ─────────────────────────────────────────────────────
 
 def embed(text: str) -> list[float]:
-    """Genera embeddings usando Gemini text-embedding-004."""
+    """Genera embeddings usando Gemini gemini-embedding-001."""
     client = _get_gemini_client()
     result = client.models.embed_content(
-        model="text-embedding-004",
+        model="gemini-embedding-001",
         contents=text,
     )
     return result.embeddings[0].values
