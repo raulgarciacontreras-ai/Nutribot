@@ -1,12 +1,15 @@
 """
 Configuración central — lee variables de entorno desde .env
 """
+import logging
 import os
 import re
 import sys
 from dotenv import load_dotenv
 
 load_dotenv()  # En Railway no hay .env pero tampoco falla
+
+_cfg_logger = logging.getLogger(__name__)
 
 
 def _require(var: str) -> str:
@@ -47,12 +50,17 @@ def get_configured_users() -> dict:
 
 CONFIGURED_USERS = get_configured_users()
 
+# ── Claude (Anthropic) ────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
 # ── LLM Primary / Fallback ────────────────────────────────────────────────────
 PRIMARY_LLM = os.getenv("PRIMARY_LLM", "claude")
 FALLBACK_LLM = os.getenv("FALLBACK_LLM", "groq")
 
-# ── Claude (Anthropic) ────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Auto-fallback: si no hay Anthropic key, usar Gemini como primario
+if not ANTHROPIC_API_KEY and PRIMARY_LLM == "claude":
+    PRIMARY_LLM = "gemini"
+    _cfg_logger.warning("ANTHROPIC_API_KEY vacía — usando Gemini como primario")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 # ── Gemini ────────────────────────────────────────────────────────────────────

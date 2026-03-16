@@ -214,7 +214,7 @@ async def _calcular_y_guardar_tdee(chat_id: int, profile: dict) -> int:
 
         # Límites de seguridad en Python también
         sexo_lower = sexo.lower()
-        minimo = 1500 if "mascul" in sexo_lower or "hombre" in sexo_lower else 1200
+        minimo = 1500 if "mascul" in sexo_lower or "hombre" in sexo_lower or sexo_lower == "no especificado" else 1200
         tdee = max(tdee, minimo)
         tdee = min(tdee, 4000)
 
@@ -252,7 +252,7 @@ async def _calcular_y_guardar_tdee(chat_id: int, profile: dict) -> int:
             else:
                 tdee_final = tdee_base
 
-            minimo = 1500 if "mascul" in sexo.lower() or "hombre" in sexo.lower() else 1200
+            minimo = 1500 if "mascul" in sexo.lower() or "hombre" in sexo.lower() or sexo.lower() == "no especificado" else 1200
             tdee_final = max(tdee_final, minimo)
             tdee_final = min(int(tdee_final), 4000)
 
