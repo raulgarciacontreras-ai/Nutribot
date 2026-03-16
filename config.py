@@ -2,23 +2,58 @@
 Configuración central — lee variables de entorno desde .env
 """
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ── Identidad ────────────────────────────────────────────────────────────────
 BOT_NAME = "Nutribot"
-NATHALIE_NAME = "Nathalie"
 
-# ── Telegram (opcionales para scripts auxiliares como ingest_guide.py) ────────
+# ── Telegram ─────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-NATHALIE_CHAT_ID = int(os.getenv("NATHALIE_CHAT_ID", "0"))
+
+# ── Usuarios configurados (formato NOMBRE_ID=chat_id en .env) ────────────────
+def get_configured_users() -> dict:
+    """
+    Lee todas las variables *_ID del .env y retorna
+    un dict {chat_id: nombre}.
+    Ejemplo: NATHALIE_ID=123 → {123: "Nathalie"}
+    También soporta formato antiguo *_CHAT_ID.
+    """
+    users = {}
+    for key, value in os.environ.items():
+        # Formato nuevo: NOMBRE_ID=chat_id
+        if key == "SUPERADMIN_ID":
+            continue
+        match = re.match(r'^([A-Z][A-Z0-9]+)_ID$', key)
+        if not match:
+            # Formato antiguo: NOMBRE_CHAT_ID=chat_id
+            match = re.match(r'^([A-Z][A-Z0-9]+)_CHAT_ID$', key)
+        if match and value.isdigit() and int(value) > 0:
+            name = match.group(1).capitalize()
+            users[int(value)] = name
+    return users
+
+CONFIGURED_USERS = get_configured_users()
+
+# ── LLM Primary / Fallback ────────────────────────────────────────────────────
+PRIMARY_LLM = os.getenv("PRIMARY_LLM", "gemini")
+FALLBACK_LLM = os.getenv("FALLBACK_LLM", "groq")
+
+# ── Claude (Anthropic) ────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+
+# ── Gemini ────────────────────────────────────────────────────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # ── Groq (OpenAI-compatible) ──────────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
 EMBED_MODEL = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
@@ -62,6 +97,12 @@ SCHEDULE = {
         "minute": int(os.getenv("SCHEDULE_CHECKIN", "21:30").split(":")[1]),
     },
 }
+
+# ── Superadmin ───────────────────────────────────────────────────────────────
+SUPERADMIN_ID = int(os.getenv("SUPERADMIN_ID", "0"))
+
+# ── Google Places (delivery) ─────────────────────────────────────────────────
+GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

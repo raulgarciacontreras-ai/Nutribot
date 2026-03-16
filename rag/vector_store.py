@@ -77,6 +77,50 @@ def ingest_chunks(chunks: list[str], metadatas: list[dict] = None):
     return col.count()
 
 
+def index_user_context(chat_id: int, context_text: str) -> None:
+    """Indexa el contexto del usuario en una colección separada."""
+    collection_name = f"user_context_{chat_id}"
+    client = _get_client()
+    col = client.get_or_create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    # Limpiar y re-indexar
+    if col.count() > 0:
+        col.delete(ids=col.get()["ids"])
+
+    chunks = [context_text[i:i + 400]
+              for i in range(0, len(context_text), 350)]
+
+    embeddings = _embed(chunks)
+    col.add(
+        documents=chunks,
+        embeddings=embeddings,
+        ids=[f"ctx_{i}" for i in range(len(chunks))],
+    )
+    logger.info("Contexto indexado para chat_id %d: %d chunks", chat_id, len(chunks))
+
+
+def query_user_context(chat_id: int, query: str) -> str:
+    """Busca en el contexto personal del usuario."""
+    try:
+        collection_name = f"user_context_{chat_id}"
+        client = _get_client()
+        col = client.get_or_create_collection(name=collection_name)
+        if col.count() == 0:
+            return ""
+        query_embedding = _embed([query])[0]
+        results = col.query(
+            query_embeddings=[query_embedding],
+            n_results=min(2, col.count()),
+        )
+        docs = results.get("documents", [[]])[0]
+        return "\n".join(docs)
+    except Exception:
+        return ""
+
+
 def retrieve(query: str, k: int = None) -> str:
     """
     Busca los fragmentos más relevantes para la query.

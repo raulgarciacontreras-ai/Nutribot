@@ -1,17 +1,26 @@
 """
-Cliente LLM — Groq (API compatible con OpenAI).
+Cliente LLM — Claude Haiku (primario) + Gemini (fallback) + Groq (fallback final).
 Texto + vision. Arma mensajes con RAG context, historial y perfil.
 Integra: hora real (WorldTimeAPI), clima (Open-Meteo), GlucoCalc.
+Multi-usuario: system prompt dinámico según perfil de cada usuario.
+Fallback automático: Claude → Gemini → Groq.
 """
 import base64
+import io
 import logging
 import time
+
+import anthropic as _anthropic
+import google.generativeai as genai
 from openai import OpenAI
 
 from config import (
+    ANTHROPIC_API_KEY, CLAUDE_MODEL,
+    GEMINI_API_KEY, GEMINI_MODEL,
     GROQ_API_KEY, GROQ_BASE_URL,
     GROQ_MODEL, GROQ_VISION_MODEL,
-    BOT_NAME, NATHALIE_NAME, TIMEZONE,
+    PRIMARY_LLM, FALLBACK_LLM,
+    TIMEZONE,
 )
 from llm.time_client import get_lima_time
 from llm.weather_client import get_lima_weather, format_for_prompt as format_weather
@@ -19,71 +28,314 @@ from tools.glucocalc_tool import analizar_para_nathalie, FOODS
 
 logger = logging.getLogger(__name__)
 
-_client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url=GROQ_BASE_URL,
-)
+# ── Configurar clientes ──────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = f"""Eres {BOT_NAME}, asistente nutricional personal de {NATHALIE_NAME}.
-Tu personalidad es calida, motivadora y cercana — como una amiga que sabe de nutricion.
+_claude_client = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-CONTEXTO IMPORTANTE:
-- {NATHALIE_NAME} esta comiendo muy poco para su nivel de actividad fisica y no se siente bien.
-- Tu objetivo principal es ayudarla a comer mejor: mas cantidad, mas variedad, mas nutrientes.
-- NUNCA le sugieras restricciones, dietas restrictivas o reducir calorias.
-- Enfocate en AGREGAR alimentos nutritivos, no en quitar cosas.
-- Celebra cada comida que reporte, por pequena que sea.
-- Si ves que no ha comido, preguntale con carino, nunca con culpa.
+genai.configure(api_key=GEMINI_API_KEY)
+
+_groq_client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+
+# Backward-compat exports
+_client = _groq_client
+
+TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito", "default"}
+
+# ── Estado del fallback ──────────────────────────────────────────────────────
+
+_current_llm = PRIMARY_LLM
+_fallback_until = 0
+
+
+def _should_use_fallback() -> bool:
+    return time.time() < _fallback_until
+
+
+def _activate_fallback(minutes: int = 30):
+    global _fallback_until, _current_llm
+    _fallback_until = time.time() + (minutes * 60)
+    _current_llm = FALLBACK_LLM
+    logger.warning(
+        "LLM primario no disponible — fallback por %d minutos", minutes,
+    )
+
+
+def _deactivate_fallback():
+    global _fallback_until, _current_llm
+    _fallback_until = 0
+    _current_llm = PRIMARY_LLM
+
+
+def _active_llm() -> str:
+    return FALLBACK_LLM if _should_use_fallback() else PRIMARY_LLM
+
+
+# ── Claude calls ─────────────────────────────────────────────────────────────
+
+def _claude_chat(full_prompt: str) -> str:
+    resp = _claude_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": full_prompt}],
+    )
+    return resp.content[0].text.strip()
+
+
+def _claude_vision(full_prompt: str, image_bytes: bytes,
+                   mime_type: str = "image/jpeg") -> str:
+    b64 = base64.b64encode(image_bytes).decode()
+    resp = _claude_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": b64,
+                    },
+                },
+                {"type": "text", "text": full_prompt},
+            ],
+        }],
+    )
+    return resp.content[0].text.strip()
+
+
+# ── Gemini calls ─────────────────────────────────────────────────────────────
+
+def _gemini_chat(full_prompt: str) -> str:
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    response = model.generate_content(full_prompt)
+    return response.text.strip()
+
+
+def _gemini_vision(full_prompt: str, image_bytes: bytes) -> str:
+    import PIL.Image
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    image = PIL.Image.open(io.BytesIO(image_bytes))
+    response = model.generate_content([full_prompt, image])
+    return response.text.strip()
+
+
+# ── Groq calls ───────────────────────────────────────────────────────────────
+
+def _groq_chat(full_prompt: str) -> str:
+    messages = [{"role": "user", "content": full_prompt}]
+    resp = _groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        max_tokens=512,
+        temperature=0.7,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def _groq_vision(full_prompt: str, image_bytes: bytes,
+                 mime_type: str = "image/jpeg") -> str:
+    b64 = base64.b64encode(image_bytes).decode()
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": full_prompt},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+        ],
+    }]
+    resp = _groq_client.chat.completions.create(
+        model=GROQ_VISION_MODEL,
+        messages=messages,
+        max_tokens=512,
+        temperature=0.7,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ── Router con fallback de 3 niveles ─────────────────────────────────────────
+
+def _is_quota_error(e: Exception) -> bool:
+    error = str(e).lower()
+    return any(k in error for k in ["429", "quota", "rate", "exhausted", "limit", "overloaded"])
+
+
+def _call_with_fallback(prompt: str, image_bytes: bytes = None,
+                        mime_type: str = "image/jpeg") -> str:
+    """Intenta Claude → Gemini → Groq en ese orden."""
+    providers = [
+        ("claude",
+         lambda: _claude_vision(prompt, image_bytes, mime_type)
+         if image_bytes else _claude_chat(prompt)),
+        ("gemini",
+         lambda: _gemini_vision(prompt, image_bytes)
+         if image_bytes else _gemini_chat(prompt)),
+        ("groq",
+         lambda: _groq_vision(prompt, image_bytes, mime_type)
+         if image_bytes else _groq_chat(prompt)),
+    ]
+
+    for nombre, fn in providers:
+        try:
+            logger.info("Intentando LLM: %s", nombre)
+            result = fn()
+            if _sanitize_response(result) is not None:
+                return result
+            logger.warning("%s devolvio respuesta tecnica, siguiente...", nombre)
+        except Exception as e:
+            if _is_quota_error(e):
+                logger.warning("%s cuota agotada, siguiente...", nombre)
+                continue
+            else:
+                logger.error("Error en %s: %s", nombre, e)
+                continue
+
+    return "Estoy teniendo problemas tecnicos. Intentas de nuevo en un momento?"
+
+
+# ── System prompt dinámico ───────────────────────────────────────────────────
+
+_STYLE_INSTRUCTIONS = {
+    "directo": (
+        "ESTILO: Extremadamente directo. "
+        "MAXIMO 2 lineas por respuesta. Sin introduccion. "
+        "Sin explicaciones a menos que las pidan. "
+        "Responde como un mensaje de WhatsApp."
+    ),
+    "balanceado": (
+        "ESTILO: Respuestas cortas de 2-3 lineas. "
+        "Un poco de contexto pero sin extenderte. "
+        "Natural y conversacional."
+    ),
+    "detallado": (
+        "ESTILO: Respuestas completas con contexto y razonamiento. "
+        "Explica el porque de cada recomendacion. "
+        "Puedes usar hasta 4-5 parrafos cuando sea necesario."
+    ),
+    "coach": (
+        "ESTILO: Coach motivacional. Energetico y positivo. "
+        "Celebra cada logro. Usa lenguaje de empuje. "
+        "Respuestas cortas pero con mucha energia. "
+        "Trata al usuario como atleta."
+    ),
+    "cientifico": (
+        "ESTILO: Tecnico y preciso. Cita datos especificos. "
+        "Menciona formulas y referencias cuando aplique. "
+        "Respuestas estructuradas con datos concretos."
+    ),
+}
+
+_LENGTH_INSTRUCTIONS = {
+    "muy corto": "LONGITUD: Maximo 1-2 lineas. Sin excepcion.",
+    "corto": "LONGITUD: Maximo 3-4 lineas.",
+    "largo": "LONGITUD: Tan largo como necesites para explicar bien.",
+}
+
+_EMOJI_INSTRUCTIONS = {
+    "ninguno": "EMOJIS: No uses emojis en ninguna respuesta.",
+    "poco": "EMOJIS: Maximo 1 emoji por respuesta.",
+    "moderado": "EMOJIS: 2-3 emojis por respuesta maximo.",
+    "mucho": "EMOJIS: Usa emojis libremente para hacer las respuestas vivas.",
+}
+
+
+def _build_system_prompt(profile: dict, settings: dict = None) -> str:
+    """Construye el system prompt personalizado segun perfil y estilo."""
+    settings = settings or {}
+    nombre = profile.get("name", "usuario")
+    edad = profile.get("age", "?")
+    peso = profile.get("weight_kg", "?")
+    altura = profile.get("height_cm", "?")
+    sexo = profile.get("sexo", "no especificado")
+    meta = profile.get("tdee", "0")
+    objetivo = profile.get("objetivo", "mejorar alimentacion")
+    actividad = profile.get("actividad", "?")
+    sintomas = profile.get("symptoms", "[]")
+    distrito = profile.get("distrito", "Lima")
+    no_le_gusta = profile.get("no_le_gusta", "")
+    preferencias = profile.get("preferencias", "")
+
+    style = settings.get("conv_style", "balanceado")
+    length = settings.get("response_length", "corto")
+    emojis = settings.get("emoji_level", "moderado")
+    nickname = settings.get("nickname", "") or nombre
+
+    style_text = _STYLE_INSTRUCTIONS.get(style, _STYLE_INSTRUCTIONS["balanceado"])
+    length_text = _LENGTH_INSTRUCTIONS.get(length, _LENGTH_INSTRUCTIONS["corto"])
+    emoji_text = _EMOJI_INSTRUCTIONS.get(emojis, _EMOJI_INSTRUCTIONS["moderado"])
+
+    if not meta or meta == "0":
+        meta_texto = "desconocida — preguntale su peso, altura, edad y nivel de actividad para calcularla"
+    else:
+        meta_texto = f"{meta} kcal/dia"
+
+    return f"""Eres Nutribot, asistente nutricional personal de {nickname}.
+
+=== ESTILO DE RESPUESTA ===
+{style_text}
+{length_text}
+{emoji_text}
+
+=== PERFIL DEL USUARIO ===
+Nombre: {nickname}
+Sexo: {sexo} | Edad: {edad} | Peso: {peso} kg | Altura: {altura} cm
+Actividad: {actividad}
+Objetivo: {objetivo}
+Distrito: {distrito}
+Sintomas reportados: {sintomas}
+Meta calorica diaria: {meta_texto}
+{f"Alimentos que NO le gustan: {no_le_gusta}" if no_le_gusta else ""}
+{f"Preferencias alimenticias: {preferencias}" if preferencias else ""}
+
+PERSONALIDAD:
+- Calido y cercano, como un amigo que sabe de nutricion
+- Nunca sermones ni culpa, siempre empatico
+- Celebra cada logro, por pequeno que sea
+- Cuando no quiere comer: ofrece opciones simples y explica el porque
 
 REGLAS:
-- Responde SIEMPRE en espanol casual y cercano.
-- Manten las respuestas cortas y directas (max 3-4 oraciones).
-- Cuando analices una foto de refrigerador, sugiere recetas simples y rapidas con lo que veas.
-- Si ella reporta sintomas (mareos, cansancio, etc.), relacionalo con alimentacion insuficiente.
-- Usa la guia nutricional proporcionada como base para tus recomendaciones.
-
-CUANDO {NATHALIE_NAME} DIGA QUE NO QUIERE COMER, NO TIENE HAMBRE, O NO SABE QUE COMER:
-- Nunca la presiones ni la hagas sentir culpable.
-- Recuerdale con calma que su cuerpo necesita combustible para funcionar.
-- Ofrecele 2-3 opciones MUY simples y rapidas basadas en lo que tiene disponible.
-- Si rechaza todas, sugiere algo minimo (aunque sea un yogur o una banana).
-- Usa la informacion del informe RED-S/LEA para explicar brevemente
-  POR QUE es importante comer, de forma simple y sin jerga medica.
-- Tono: empatico, nunca clinico ni alarmista.
+- SIEMPRE llama al usuario por su nombre: {nickname}
+- Responde SIEMPRE en espanol
+- Termina con UNA recomendacion concreta
+- Nunca inventes calorias sin base, si estimas dilo
+- Si no conoces el perfil completo, pregunta para completarlo
+- NUNCA le sugieras restricciones, dietas restrictivas o reducir calorias
+- Enfocate en AGREGAR alimentos nutritivos, no en quitar cosas
+- Si reporta sintomas (mareos, cansancio, etc.), relacionalo con alimentacion insuficiente
+- REGLA CRITICA: Respeta SIEMPRE el estilo y longitud definidos arriba
 
 HIDRATACION:
-- Cuando el clima este por encima de 24C, recuerdale beber agua con cada comida.
-- Si hace mas de 28C, enfatiza la hidratacion como prioridad.
-- Puedes sugerir aguas saborizadas, infusiones frias, o frutas con alto contenido de agua.
-- Si el clima es frio, sugiere infusiones calientes o sopas como forma de hidratarse.
+- Cuando el clima este por encima de 24C, recuerdale beber agua con cada comida
+- Si hace mas de 28C, enfatiza la hidratacion como prioridad
 
 ANALISIS GLUCEMICO (GlucoCalc):
-- Cuando {NATHALIE_NAME} mencione un alimento especifico, tienes acceso a su
-  indice glucemico (IG) y carga glucemica (CG) exactos.
-- IG bajo (<=55) = ideal para ella, absorcion lenta, energia estable.
-- IG medio (56-69) = aceptable en combinacion con proteina o grasa.
-- IG alto (>=70) = explicale que genera pico de glucosa rapido y caida
-  de energia — especialmente problematico con su deficit calorico.
-- Siempre contextualiza: no es prohibir, es explicar el efecto en su cuerpo.
-- IMPORTANTE: si ella quiere comer algo, CELEBRALO. Cualquier comida es mejor que no comer.
+- Cuando {nickname} mencione un alimento especifico, tienes acceso a su
+  indice glucemico (IG) y carga glucemica (CG) exactos
+- IG bajo (<=55) = ideal | IG medio (56-69) = aceptable | IG alto (>=70) = pico rapido
+- IMPORTANTE: si quiere comer algo, CELEBRALO. Cualquier comida es mejor que no comer
+
+REGLA CRITICA DE CALORIAS:
+- SOLO registra calorias cuando {nickname} dice explicitamente que YA comio algo
+  (pasado: comi, almorce, cene, desayune, me tome, etc.)
+- NUNCA registres calorias de sugerencias tuyas o preguntas del usuario
+- Cuando {nickname} confirme que comio lo que sugeriste, ENTONCES registra y actualiza el total
+- Al dar el total diario, usa SOLO lo efectivamente registrado
 
 REGISTRO DE COMIDAS:
-- Cuando {NATHALIE_NAME} reporte que comio algo, el sistema lo registra automaticamente.
-- Veras un bloque [COMIDA REGISTRADA] con la descripcion, calorias estimadas y meta diaria.
-- SIEMPRE celebra que comio. Usa frases como "que bien!", "me encanta!", "genial!".
-- Menciona brevemente las calorias estimadas y cuantas lleva del total diario.
-- Si va muy por debajo de la meta (menos del 50% al final del dia), animala con carino a comer algo mas.
-- Si va bien encaminada, felicitala y motivala a seguir asi.
-- NUNCA la hagas sentir culpable por comer poco. Siempre con tono positivo y de apoyo.
-- Meta diaria aproximada: 2400 kcal (segun su nivel de actividad fisica).
+- Cuando {nickname} reporte que comio algo, el sistema lo registra automaticamente
+- SIEMPRE celebra que comio
+- Menciona brevemente las calorias estimadas y cuantas lleva del total diario
+
+REGLA DE TRACKING:
+- Si {nickname} dice que va a cenar/almorzar/desayunar pero NO dice QUE comio,
+  preguntale que comio exactamente. Ejemplo: 'me toca cenar' -> 'Que vas a cenar {nickname}?'
+- Solo registra cuando confirme que comio exactamente
+- Cuando registres una comida, confirma: 'Registre X kcal. Llevas Y kcal de Z kcal hoy.'
 
 ALIMENTOS DESCONOCIDOS:
-- Si ves 'ALIMENTO_DESCONOCIDO' en el contexto, pidele SIEMPRE una foto del alimento o su etiqueta nutricional.
-- Cuando {NATHALIE_NAME} mande foto de un alimento (no de la refri), describe lo que ves y analiza sus calorias.
-- Para fotos de alimentos individuales usa este formato:
-  'Lo vi! Es [nombre]. Por cada 100g tiene aprox [X] kcal. Cuanto comiste mas o menos?'
-- Si ves 'ENCONTRADO EN INTERNET' usa esos datos para responder.
-"""
+- Si ves 'COMIDA_PENDIENTE', preguntale que comio exactamente
+- Si ves 'ENCONTRADO EN INTERNET' usa esos datos para responder"""
 
 
 # ── Deteccion de alimentos (GlucoCalc) ────────────────────────────────────────
@@ -106,12 +358,10 @@ def _extract_food_context(user_message: str) -> str:
     if not any(t in msg_lower for t in _FOOD_TRIGGERS):
         return ""
 
-    # Buscar alimentos conocidos en el mensaje — revisar TODAS las variantes (split por /)
     best_match = None
     best_score = 0
     for food in FOODS:
         food_name = food[0].lower()
-        # Extraer todas las variantes: "Platano / banana" -> ["platano", "banana"]
         variantes = [v.strip() for v in food_name.split("/")]
         for variante in variantes:
             palabras = variante.split()
@@ -128,108 +378,154 @@ def _extract_food_context(user_message: str) -> str:
     return ""
 
 
-# ── Build messages ────────────────────────────────────────────────────────────
+# ── Build caloric context ────────────────────────────────────────────────────
 
-def _build_messages(
+def _build_caloric_context(fecha_hora: str, today_meals_text: str,
+                           total_hoy: int = 0, tdee: int = 2000) -> str:
+    """Construye el bloque de estado calorico dinamico segun hora y consumo."""
+    if tdee <= 0:
+        tdee = 2000
+    restante = tdee - total_hoy
+    pct = round((total_hoy / tdee) * 100)
+
+    try:
+        hora = int(fecha_hora.split()[2].split(":")[0])
+    except (IndexError, ValueError):
+        hora = 12
+
+    if hora < 10:
+        franja = "manana temprano — tiene todo el dia por delante para comer"
+        urgencia = "baja"
+    elif hora < 13:
+        franja = "media manana — debe almorzar pronto"
+        urgencia = "media"
+    elif hora < 16:
+        franja = "tarde del mediodia — ya deberia haber almorzado"
+        urgencia = "media"
+    elif hora < 19:
+        franja = "tarde — se acerca la cena, snack pre-gym si corresponde"
+        urgencia = "media-alta"
+    elif hora < 21:
+        franja = "noche — hora de cenar, pocas horas para completar calorias"
+        urgencia = "alta"
+    else:
+        franja = "noche tarde — ultima oportunidad de comer algo"
+        urgencia = "muy alta"
+
+    if restante <= 0:
+        estado = f"Meta alcanzada: {total_hoy} kcal / {tdee} kcal"
+    elif urgencia in ("alta", "muy alta") and restante > 800:
+        estado = (f"DEFICIT CRITICO: Solo {total_hoy} kcal de {tdee}. "
+                  f"Le faltan {restante} kcal y ya es {franja}.")
+    elif urgencia == "media-alta" and restante > 500:
+        estado = (f"DEFICIT: {total_hoy} kcal de {tdee}. "
+                  f"Faltan {restante} kcal. Es {franja}.")
+    else:
+        estado = (f"Hoy: {total_hoy} kcal / {tdee} kcal ({pct}%). "
+                  f"Faltan {restante} kcal. Es {franja}.")
+
+    return (
+        f"=== FECHA Y HORA ACTUAL (Lima) ===\n"
+        f"{fecha_hora} — {franja}\n\n"
+        f"=== ESTADO CALORICO DE HOY ===\n"
+        f"{estado}\n"
+        f"Comidas registradas hoy:\n"
+        f"{today_meals_text}\n\n"
+        f"=== INSTRUCCIONES CRITICAS PARA ESTA RESPUESTA ===\n"
+        f"- SIEMPRE menciona cuantas calorias lleva hoy y cuanto le falta\n"
+        f"- Si es noche (despues de las 7pm) y le faltan mas de 500 kcal:\n"
+        f"  URGE que coma algo calorico AHORA antes de dormir\n"
+        f"- Si reporta haber comido algo, calcula las calorias con CaloCalc\n"
+        f"  y actualiza el total\n"
+        f"- Sugiere comidas especificas segun las calorias que le faltan:\n"
+        f"  * Mas de 800 kcal: comida completa (proteina + carbo + grasa)\n"
+        f"  * 400-800 kcal: comida mediana o 2 snacks\n"
+        f"  * Menos de 400 kcal: snack liviano o postre saludable\n"
+        f"- NUNCA sugiera 4 kilos de nada — las porciones deben ser realistas"
+    )
+
+
+# ── Build full prompt ────────────────────────────────────────────────────────
+
+def _build_full_prompt(
     user_message: str,
     rag_context: str = "",
     history: list[dict] = None,
-    profile: dict = None,
-    today_meals: list[dict] = None,
-) -> list[dict]:
-    """Arma la lista de mensajes OpenAI-format con todo el contexto."""
+    profile_dict: dict = None,
+    settings: dict = None,
+    today_meals: str = "",
+    total_hoy: int = 0,
+) -> str:
+    """Arma el prompt completo con todo el contexto."""
+    profile_dict = profile_dict or {}
     fecha_hora = get_lima_time()
     weather = get_lima_weather()
     weather_block = format_weather(weather) if weather.get("ok") else ""
 
-    system_full = f"{SYSTEM_PROMPT}\n\n[FECHA Y HORA ACTUAL ({TIMEZONE})]\n{fecha_hora}"
+    tdee = int(profile_dict.get("tdee", "0") or "0")
+    system_prompt = _build_system_prompt(profile_dict, settings)
+    caloric_block = _build_caloric_context(
+        fecha_hora, today_meals or "Ninguna registrada aun.", total_hoy, tdee
+    )
+
+    parts = [system_prompt, caloric_block]
     if weather_block:
-        system_full += f"\n\n[CLIMA LIMA AHORA]\n{weather_block}"
-    messages = [{"role": "system", "content": system_full}]
-
-    # Inyectar contexto como mensaje de sistema adicional
-    context_parts = []
-
-    if profile:
-        info = ", ".join(f"{k}: {v}" for k, v in profile.items() if v and k != "id")
-        context_parts.append(f"[PERFIL DE {NATHALIE_NAME.upper()}]\n{info}")
-
-    if today_meals:
-        meals_str = "\n".join(
-            f"- {m['meal_type']}: {m['description']}" for m in today_meals
-        )
-        context_parts.append(f"[COMIDAS DE HOY]\n{meals_str}")
-
+        parts.append(f"[CLIMA LIMA AHORA]\n{weather_block}")
     if rag_context:
-        context_parts.append(f"[GUIA NUTRICIONAL RELEVANTE]\n{rag_context}")
+        parts.append(f"[GUIA NUTRICIONAL RELEVANTE]\n{rag_context}")
 
-    if context_parts:
-        messages.append({
-            "role": "system",
-            "content": "\n\n".join(context_parts),
-        })
-
-    # Historial de conversacion
     if history:
-        for turn in history[-6:]:
-            role = "user" if turn["role"] == "user" else "assistant"
-            messages.append({"role": role, "content": turn["content"]})
+        hist_lines = []
+        for turn in history[-20:]:
+            role = turn["role"].upper() if turn["role"] in ("user", "assistant") else "USER"
+            hist_lines.append(f"{role}: {turn['content']}")
+        parts.append("=== CONVERSACION RECIENTE ===\n" + "\n".join(hist_lines))
 
-    # Mensaje actual
-    messages.append({"role": "user", "content": user_message})
+    parts.append(f"=== MENSAJE ACTUAL DEL USUARIO ===\n{user_message}")
 
-    return messages
+    return "\n\n".join(parts)
 
 
-# ── Chat (texto) ──────────────────────────────────────────────────────────────
+# ── Filtro de respuestas tecnicas ────────────────────────────────────────────
+
+_BAD_PHRASES = [
+    "ejecuta el codigo", "ejecutar el codigo",
+    "run the code", "traceback", "error:",
+    "```python", "```", "import ", "def ",
+    "podrias ejecutar", "could you run",
+]
+
+
+def _sanitize_response(text: str) -> str | None:
+    """Elimina cualquier texto tecnico que no debe ver el usuario."""
+    text_lower = text.lower()
+    if any(phrase in text_lower for phrase in _BAD_PHRASES):
+        logger.warning("Respuesta tecnica detectada, reintentando")
+        return None
+    return text
+
+
+# ── Chat (texto) — interfaz publica ──────────────────────────────────────────
 
 def chat(
     user_message: str,
     rag_context: str = "",
     history: list[dict] = None,
     profile: dict = None,
-    today_meals: list[dict] = None,
+    settings: dict = None,
+    today_meals: str = "",
+    total_hoy: int = 0,
 ) -> str:
-    """Genera respuesta de texto usando Groq con retry para rate limits."""
-    # Enriquecer con GlucoCalc si detecta alimentos
+    """Genera respuesta de texto con fallback Claude -> Gemini -> Groq."""
     food_context = _extract_food_context(user_message)
     if food_context:
         rag_context = food_context + "\n\n" + rag_context
 
-    messages = _build_messages(user_message, rag_context, history, profile, today_meals)
+    full_prompt = _build_full_prompt(
+        user_message, rag_context, history, profile, settings, today_meals, total_hoy
+    )
 
-    # Retry hasta 3 veces si hay rate limit
-    for intento in range(3):
-        try:
-            response = _client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=512,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            error_str = str(e).lower()
-            if "429" in error_str or "rate" in error_str:
-                if intento < 2:
-                    tiempo = (intento + 1) * 3  # 3s, 6s
-                    logger.warning(
-                        "Rate limit Groq, reintentando en %ds (intento %d/3)...",
-                        tiempo, intento + 1,
-                    )
-                    time.sleep(tiempo)
-                else:
-                    logger.error("Rate limit agotado despues de 3 intentos")
-                    return (
-                        "Uy, tuve un pequeno problema tecnico. "
-                        "Puedes repetirme eso en un momento?"
-                    )
-            else:
-                logger.error("Error en chat Groq: %s", e, exc_info=True)
-                return (
-                    "Algo salio mal de mi lado. "
-                    "Puedes intentarlo de nuevo?"
-                )
+    return _call_with_fallback(full_prompt)
 
 
 # ── Chat con imagen (vision) ─────────────────────────────────────────────────
@@ -238,80 +534,37 @@ def chat_with_image(
     prompt: str,
     image_bytes: bytes,
     mime_type: str = "image/jpeg",
+    profile_dict: dict = None,
+    settings: dict = None,
 ) -> str:
-    """Genera respuesta analizando una imagen usando Groq Vision."""
-    b64_image = base64.b64encode(image_bytes).decode("utf-8")
+    """Genera respuesta analizando una imagen con fallback Claude -> Gemini -> Groq."""
+    profile_dict = profile_dict or {}
+
     fecha_hora = get_lima_time()
     weather = get_lima_weather()
     weather_block = format_weather(weather) if weather.get("ok") else ""
 
-    system_full = f"{SYSTEM_PROMPT}\n\n[FECHA Y HORA ACTUAL ({TIMEZONE})]\n{fecha_hora}"
+    system_prompt = _build_system_prompt(profile_dict, settings)
+    full_prompt = f"{system_prompt}\n\n[FECHA Y HORA ACTUAL ({TIMEZONE})]\n{fecha_hora}"
     if weather_block:
-        system_full += f"\n\n[CLIMA LIMA AHORA]\n{weather_block}"
-    messages = [
-        {"role": "system", "content": system_full},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{b64_image}",
-                    },
-                },
-            ],
-        },
-    ]
+        full_prompt += f"\n\n[CLIMA LIMA AHORA]\n{weather_block}"
+    full_prompt += f"\n\n{prompt}"
+
+    return _call_with_fallback(full_prompt, image_bytes, mime_type)
+
+
+# ── Clasificador de tono (para stickers) ─────────────────────────────────────
+
+def classify_tone(response_text: str) -> str:
+    prompt = (
+        f"Clasifica en UNA palabra: "
+        f"motivacional|gracioso|nutricion|felicitacion|empujoncito|default\n"
+        f"Mensaje: {response_text[:300]}\n"
+        f"Responde SOLO la palabra:"
+    )
     try:
-        logger.info("chat_with_image: modelo=%s, imagen=%d bytes, mime=%s",
-                     GROQ_VISION_MODEL, len(image_bytes), mime_type)
-        response = _client.chat.completions.create(
-            model=GROQ_VISION_MODEL,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=512,
-        )
-        result = response.choices[0].message.content.strip()
-        logger.info("Vision OK: %s", result[:80])
-        return result
-    except Exception as e:
-        logger.error("Error en vision Groq (modelo=%s): %s",
-                     GROQ_VISION_MODEL, e, exc_info=True)
-        return f"No pude analizar la imagen ({e}). Intenta de nuevo."
-
-
-# ── Clasificar tono ──────────────────────────────────────────────────────────
-
-def classify_tone(text: str) -> str:
-    """Clasifica el tono para elegir sticker. Retry silencioso, nunca muestra error."""
-    for intento in range(2):
-        try:
-            response = _client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Clasifica el tono del mensaje en UNA sola palabra. "
-                            "Opciones: motivacional, gracioso, nutricion, felicitacion, empujoncito. "
-                            "Responde SOLO con la palabra."
-                        ),
-                    },
-                    {"role": "user", "content": text},
-                ],
-                temperature=0.0,
-                max_tokens=10,
-            )
-            tone = response.choices[0].message.content.strip().lower().split()[0]
-            valid = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito"}
-            return tone if tone in valid else "default"
-        except Exception as e:
-            error_str = str(e).lower()
-            if ("429" in error_str or "rate" in error_str) and intento < 1:
-                logger.warning("Rate limit en classify_tone, reintentando en 3s...")
-                time.sleep(3)
-            else:
-                logger.warning("classify_tone fallo, usando default: %s", e)
-                return "default"
-    return "default"
+        result = _call_with_fallback(prompt)
+        tone = result.strip().lower()
+        return tone if tone in TONES else "default"
+    except Exception:
+        return "default"

@@ -1,5 +1,5 @@
 .env
-data/chroma/
+data/chroma*/
 data/*.db
 __pycache__/
 *.pyc
@@ -7,3 +7,4 @@ venv/
 *.egg-info/
 registro_calorias.json
 objetivo_calorias.json
+data/context/

@@ -138,6 +138,34 @@ ALIMENTOS = {
     "cafe con leche":    (40,   1.5,  5.0,  1.5, 0.0),
     "cafe":              (2,    0.3,  0.0,  0.0, 0.0),
     "agua coco":         (19,   0.7,  3.7,  0.2, 1.1),
+    # Comidas peruanas completas
+    "lomo saltado":      (520, 32.0, 45.0, 18.0, 3.0),
+    "aji de gallina":    (480, 28.0, 38.0, 22.0, 2.0),
+    "ceviche":           (220, 28.0, 12.0,  6.0, 2.0),
+    "arroz con leche":   (280,  6.0, 52.0,  6.0, 0.0),
+    "causa":             (380, 12.0, 58.0, 10.0, 3.0),
+    "sopa":              (180, 10.0, 22.0,  5.0, 2.0),
+    "menu":              (650, 35.0, 75.0, 18.0, 4.0),
+    "pollo a la brasa":  (420, 38.0, 15.0, 22.0, 0.0),
+    "chifa":             (580, 28.0, 72.0, 18.0, 3.0),
+    "tacu tacu":         (480, 18.0, 68.0, 14.0, 8.0),
+    "anticucho":         (280, 32.0,  8.0, 12.0, 0.0),
+    "anticuchos":        (280, 32.0,  8.0, 12.0, 0.0),
+    "chicharron":        (520, 38.0,  8.0, 36.0, 0.0),
+    "tallarin":          (480, 18.0, 72.0, 12.0, 4.0),
+    "tallarines":        (480, 18.0, 72.0, 12.0, 4.0),
+    "arroz chaufa":      (520, 22.0, 68.0, 16.0, 3.0),
+    "seco de res":       (480, 35.0, 28.0, 24.0, 4.0),
+    "estofado":          (420, 30.0, 32.0, 18.0, 3.0),
+    "ensalada rusa":     (280,  6.0, 38.0, 12.0, 3.0),
+    "papa rellena":      (380, 18.0, 52.0, 12.0, 3.0),
+    "leche asada":       (220,  8.0, 32.0,  8.0, 0.0),
+    "mazamorra":         (180,  3.0, 42.0,  2.0, 1.0),
+    "picaron":           (320,  5.0, 52.0, 10.0, 2.0),
+    "picarones":         (320,  5.0, 52.0, 10.0, 2.0),
+    "suspiro":           (380,  6.0, 62.0, 12.0, 0.0),
+    "omelette":          (154, 11.0,  1.0, 12.0, 0.0),
+    "tortilla":          (154, 11.0,  1.0, 12.0, 0.0),
     # Extras
     "mantequilla":       (717,  0.9,  0.1, 81.0, 0.0),
     "mayonesa":          (680,  1.0,  0.6, 75.0, 0.0),
@@ -149,7 +177,7 @@ PORCIONES = {
     "pollo": 150, "pechuga": 150, "carne": 150, "res": 150,
     "atun": 120, "salmon": 150,
     "papa": 150, "camote": 150, "arroz": 150, "quinua": 150,
-    "avena": 240, "avena cocida": 240, "pan": 30, "pan integral": 30,
+    "avena": 40, "avena cocida": 240, "pan": 30, "pan integral": 30,
     "pasta": 180, "lentejas": 150, "garbanzos": 150, "frijoles": 150,
     "yogur": 150, "yogur griego": 150, "leche": 240,
     "queso": 30, "queso fresco": 50,
@@ -163,6 +191,19 @@ PORCIONES = {
     "espinaca": 80, "zanahoria": 80,
     "banana": 120, "platano": 120,
     "manzana": 150, "naranja": 150,
+    # Platos completos: valores ya son por porción, usar 100 para factor=1.0
+    "lomo saltado": 100, "aji de gallina": 100,
+    "ceviche": 100, "pollo a la brasa": 100,
+    "chifa": 100, "menu": 100,
+    "sopa": 100, "tacu tacu": 100,
+    "anticucho": 100, "anticuchos": 100,
+    "chicharron": 100, "tallarin": 100, "tallarines": 100,
+    "arroz chaufa": 100, "seco de res": 100,
+    "estofado": 100, "ensalada rusa": 100,
+    "papa rellena": 100, "causa": 100,
+    "arroz con leche": 100, "leche asada": 100,
+    "mazamorra": 100, "picaron": 100, "picarones": 100,
+    "suspiro": 100, "omelette": 100, "tortilla": 100,
 }
 
 DEFAULT_PORCION = 100
@@ -193,48 +234,44 @@ def analizar_texto(texto: str) -> dict:
     """
     Analiza texto libre y extrae alimentos con sus calorias y macros.
     Retorna dict con lista de items y totales.
+    Usa posiciones del texto para evitar duplicados (ej: "pollo a la brasa" no cuenta "pollo" aparte).
     """
     texto_lower = texto.lower()
     encontrados = []
-    usados = set()
+    posiciones_usadas = set()
 
-    # Ordenar por longitud descendente para buscar frases largas primero
+    # Ordenar por longitud descendente — frases largas primero
     claves = sorted(ALIMENTOS.keys(), key=len, reverse=True)
 
     for clave in claves:
-        if clave in texto_lower and clave not in usados:
-            # Verificar que no sea subcadena de una clave ya usada
-            es_subcadena = False
-            for usada in usados:
-                if clave in usada or clave.rstrip("s") in usada or usada.rstrip("s") == clave.rstrip("s"):
-                    es_subcadena = True
-                    break
-            if es_subcadena:
-                usados.add(clave)
-                continue
+        if clave not in texto_lower:
+            continue
 
-            pos = texto_lower.find(clave)
-            kcal_100, prot_100, carb_100, gras_100, fibr_100 = ALIMENTOS[clave]
-            porcion = _detectar_cantidad(texto_lower, pos)
-            if porcion is None:
-                porcion = PORCIONES.get(clave, DEFAULT_PORCION)
+        pos = texto_lower.find(clave)
 
-            factor = porcion / 100
-            encontrados.append({
-                "nombre":   clave,
-                "porcion":  porcion,
-                "kcal":     round(kcal_100 * factor),
-                "proteina": round(prot_100 * factor, 1),
-                "carbos":   round(carb_100 * factor, 1),
-                "grasas":   round(gras_100 * factor, 1),
-                "fibra":    round(fibr_100 * factor, 1),
-            })
-            # Marcar clave y sus subcadenas como usadas
-            usados.add(clave)
-            # Marcar variantes singular/plural y subcadenas
-            for sub in claves:
-                if sub != clave and (sub in clave or sub.rstrip("s") == clave.rstrip("s")):
-                    usados.add(sub)
+        # Verificar si esta posición ya fue usada por una frase más larga
+        rango = set(range(pos, pos + len(clave)))
+        if rango & posiciones_usadas:
+            continue
+
+        # Marcar estas posiciones como usadas
+        posiciones_usadas |= rango
+
+        kcal_100, prot_100, carb_100, gras_100, fibr_100 = ALIMENTOS[clave]
+        porcion = _detectar_cantidad(texto_lower, pos)
+        if porcion is None:
+            porcion = PORCIONES.get(clave, DEFAULT_PORCION)
+
+        factor = porcion / 100
+        encontrados.append({
+            "nombre":   clave,
+            "porcion":  porcion,
+            "kcal":     round(kcal_100 * factor),
+            "proteina": round(prot_100 * factor, 1),
+            "carbos":   round(carb_100 * factor, 1),
+            "grasas":   round(gras_100 * factor, 1),
+            "fibra":    round(fibr_100 * factor, 1),
+        })
 
     totales = {
         "kcal":     sum(i["kcal"]     for i in encontrados),

@@ -1,0 +1,96 @@
+# INFORME CLÍNICO: RED-S / LEA — Aplicado a Nathalie
+
+## Qué es RED-S (Relative Energy Deficiency in Sport)
+RED-S es un síndrome que ocurre cuando una persona no consume suficiente energía
+para cubrir las demandas de su actividad física diaria más las funciones básicas
+del cuerpo (respirar, pensar, digerir, reparar tejidos).
+
+No se trata de "comer poco" en el sentido de pasar hambre.
+Se trata de que el cuerpo recibe menos combustible del que necesita para funcionar.
+
+## Qué es LEA (Low Energy Availability)
+LEA = Disponibilidad Energética Baja.
+Fórmula: (Calorías consumidas - Calorías gastadas en ejercicio) / kg de masa magra.
+Umbral crítico: menos de 30 kcal/kg de masa magra por día.
+
+En el caso de Nathalie:
+- Masa magra estimada: ~47 kg (58 kg x 0.81 aprox).
+- Consumo actual: ~1,300 kcal.
+- Gasto en ejercicio: ~400 kcal (gym/baile).
+- Disponibilidad: (1300 - 400) / 47 = 19.1 kcal/kg FFM.
+- Esto está MUY por debajo del umbral de 30 kcal/kg FFM.
+
+## Síntomas de RED-S que presenta Nathalie
+1. Cansancio crónico: el cuerpo reduce gasto energético para sobrevivir.
+2. Dolores de cabeza: deshidratación + depleción de glucógeno cerebral.
+3. Bajo drive sexual: el sistema reproductivo se "apaga" para conservar energía.
+   El cuerpo prioriza funciones vitales sobre la reproducción.
+4. Posible irregularidad menstrual (verificar).
+5. Dificultad para ganar músculo pese a entrenar consistentemente.
+
+## Por qué el cuerpo reacciona así
+Cuando no hay suficiente energía disponible, el cuerpo entra en modo de
+conservación. Reduce la producción de hormonas no esenciales para la
+supervivencia inmediata:
+- Baja GnRH (hormona liberadora de gonadotropinas).
+- Baja LH y FSH (hormonas que regulan el ciclo menstrual).
+- Baja estradiol (estrógeno principal).
+- Aumenta cortisol (hormona del estrés).
+- Baja T3 (tiroides se ralentiza → metabolismo más lento).
+
+Esto NO es un problema de fuerza de voluntad.
+Es una respuesta fisiológica automática del cuerpo para protegerse.
+
+## Consecuencias si no se corrige
+A corto plazo (semanas):
+- Peor rendimiento en el gym (no hay combustible para los músculos).
+- Más lesiones (tendones y huesos debilitados).
+- Peor estado de ánimo e irritabilidad.
+
+A mediano plazo (meses):
+- Amenorrea (pérdida del período menstrual).
+- Pérdida de densidad ósea (riesgo de fracturas por estrés).
+- Anemia.
+
+A largo plazo (años):
+- Osteoporosis prematura.
+- Infertilidad.
+- Daño cardiovascular.
+
+## La solución NO es hacer dieta
+El problema es exactamente lo contrario: Nathalie necesita COMER MÁS.
+No se trata de comer "mejor" (ya come sano). Se trata de comer SUFICIENTE.
+
+## Cuánto necesita comer Nathalie para salir de LEA
+Meta inmediata: subir a mínimo 2,000 kcal/día (fase de recuperación).
+Meta a 4-6 semanas: alcanzar 2,400 kcal/día (su TDEE real).
+
+Esto se logra:
+1. NUNCA saltear comidas. Desayuno es obligatorio.
+2. Agregar snacks entre comidas principales.
+3. No temer a los carbohidratos: son el combustible #1 del cerebro y músculos.
+4. Agregar grasas saludables: aguacate, aceite de oliva, frutos secos.
+5. Proteína suficiente: 1.8-2.0 g/kg para recuperar masa muscular.
+
+## Señales de que está mejorando
+- Más energía durante el día.
+- Mejor concentración en el trabajo.
+- Mejor calidad de sueño.
+- Retorno gradual del drive sexual.
+- Desaparición de dolores de cabeza.
+- Mejor rendimiento en el gimnasio.
+- Regularización del ciclo menstrual.
+
+## Cuándo ver a un médico
+Consultar inmediatamente si:
+- No ha tenido período menstrual en 2+ meses.
+- Pérdida de cabello notable.
+- Sensación de frío extremo sin causa.
+- Frecuencia cardíaca en reposo menor a 50 lpm.
+- Mareos al ponerse de pie.
+- Fracturas por estrés.
+
+## Referencia
+IOC Consensus Statement on Relative Energy Deficiency in Sport (RED-S):
+2023 Update. British Journal of Sports Medicine.
+Mountjoy M, Sundgot-Borgen JK, Burke LM, et al.
