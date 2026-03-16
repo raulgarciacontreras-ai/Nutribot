@@ -3,15 +3,25 @@ Configuración central — lee variables de entorno desde .env
 """
 import os
 import re
+import sys
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # En Railway no hay .env pero tampoco falla
+
+
+def _require(var: str) -> str:
+    val = os.getenv(var)
+    if not val:
+        print(f"ERROR: Variable requerida faltante: {var}")
+        sys.exit(1)
+    return val
+
 
 # ── Identidad ────────────────────────────────────────────────────────────────
 BOT_NAME = "Nutribot"
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_TOKEN = _require("TELEGRAM_BOT_TOKEN")
 
 # ── Usuarios configurados (formato NOMBRE_ID=chat_id en .env) ────────────────
 def get_configured_users() -> dict:
@@ -38,7 +48,7 @@ def get_configured_users() -> dict:
 CONFIGURED_USERS = get_configured_users()
 
 # ── LLM Primary / Fallback ────────────────────────────────────────────────────
-PRIMARY_LLM = os.getenv("PRIMARY_LLM", "gemini")
+PRIMARY_LLM = os.getenv("PRIMARY_LLM", "claude")
 FALLBACK_LLM = os.getenv("FALLBACK_LLM", "groq")
 
 # ── Claude (Anthropic) ────────────────────────────────────────────────────────

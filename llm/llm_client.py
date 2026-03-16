@@ -11,7 +11,8 @@ import logging
 import time
 
 import anthropic as _anthropic
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from openai import OpenAI
 
 from config import (
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 _claude_client = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-genai.configure(api_key=GEMINI_API_KEY)
+_gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 _groq_client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
 
@@ -44,13 +45,13 @@ TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito",
 
 # ── Embeddings con Gemini ─────────────────────────────────────────────────────
 
-def embed(texts: list[str]) -> list[list[float]]:
+def embed(text: str) -> list[float]:
     """Genera embeddings usando Gemini text-embedding-004."""
-    result = genai.embed_content(
-        model="models/text-embedding-004",
-        content=texts,
+    result = _gemini_client.models.embed_content(
+        model="text-embedding-004",
+        contents=text,
     )
-    return result["embedding"]
+    return result.embeddings[0].values
 
 # ── Estado del fallback ──────────────────────────────────────────────────────
 
@@ -119,16 +120,20 @@ def _claude_vision(full_prompt: str, image_bytes: bytes,
 # ── Gemini calls ─────────────────────────────────────────────────────────────
 
 def _gemini_chat(full_prompt: str) -> str:
-    model = genai.GenerativeModel(GEMINI_MODEL)
-    response = model.generate_content(full_prompt)
+    response = _gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=full_prompt,
+    )
     return response.text.strip()
 
 
 def _gemini_vision(full_prompt: str, image_bytes: bytes) -> str:
     import PIL.Image
-    model = genai.GenerativeModel(GEMINI_MODEL)
     image = PIL.Image.open(io.BytesIO(image_bytes))
-    response = model.generate_content([full_prompt, image])
+    response = _gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[full_prompt, image],
+    )
     return response.text.strip()
 
 

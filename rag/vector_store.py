@@ -25,7 +25,7 @@ def _get_client() -> chromadb.ClientAPI:
 
 def _embed(texts: list[str]) -> list[list[float]]:
     """Genera embeddings usando Gemini text-embedding-004."""
-    return embed(texts)
+    return [embed(t) for t in texts]
 
 
 def is_populated() -> bool:
