@@ -1,21 +1,10 @@
-# Telegram
 python-telegram-bot==21.7
-
-# LLM (Sambanova — API compatible con OpenAI)
-openai>=1.0.0
-
-# Embeddings locales
-sentence-transformers>=3.0.0
-
-# RAG
+google-generativeai>=0.8.0
 chromadb>=0.5.0
-
-# Scheduler
+anthropic>=0.40.0
+openai>=1.0.0
 APScheduler>=3.10
 pytz
-
-# PDF support (opcional, para guías en PDF)
-PyMuPDF>=1.24.0
-
-# Env
-python-dotenv>=1.0
+python-dotenv>=1.0.0
+Pillow>=10.0
+requests>=2.31.0

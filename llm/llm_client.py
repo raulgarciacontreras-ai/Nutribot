@@ -41,6 +41,17 @@ _client = _groq_client
 
 TONES = {"motivacional", "gracioso", "nutricion", "felicitacion", "empujoncito", "default"}
 
+
+# ── Embeddings con Gemini ─────────────────────────────────────────────────────
+
+def embed(texts: list[str]) -> list[list[float]]:
+    """Genera embeddings usando Gemini text-embedding-004."""
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=texts,
+    )
+    return result["embedding"]
+
 # ── Estado del fallback ──────────────────────────────────────────────────────
 
 _current_llm = PRIMARY_LLM

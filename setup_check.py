@@ -102,13 +102,12 @@ def check_sambanova_vision():
         return False, str(e)
 
 
-@check("Embeddings locales (sentence-transformers)")
+@check("Embeddings (Gemini text-embedding-004)")
 def check_embeddings():
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        emb = model.encode(["prueba"])
-        return True, f"Modelo cargado, dimensiones: {len(emb[0])}"
+        from llm.llm_client import embed
+        emb = embed(["prueba"])
+        return True, f"Gemini embeddings OK, dimensiones: {len(emb[0])}"
     except Exception as e:
         return False, str(e)
 

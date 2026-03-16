@@ -1,20 +1,18 @@
 """
 RAG con ChromaDB — almacena y busca fragmentos de la guía nutricional.
-Usa sentence-transformers (all-MiniLM-L6-v2) para embeddings locales.
+Usa Gemini text-embedding-004 para embeddings.
 """
 import logging
 import os
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from sentence_transformers import SentenceTransformer
 
-from config import CHROMA_PERSIST_DIR, RAG_TOP_K, EMBED_MODEL
+from config import CHROMA_PERSIST_DIR, RAG_TOP_K
+from llm.llm_client import embed
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "nutrition_guide"
-
-_embedder = SentenceTransformer(EMBED_MODEL)
 
 
 def _get_client() -> chromadb.ClientAPI:
@@ -26,8 +24,8 @@ def _get_client() -> chromadb.ClientAPI:
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    """Genera embeddings usando sentence-transformers (local, sin API)."""
-    return _embedder.encode(texts, normalize_embeddings=True).tolist()
+    """Genera embeddings usando Gemini text-embedding-004."""
+    return embed(texts)
 
 
 def is_populated() -> bool:
@@ -51,7 +49,7 @@ def get_count() -> int:
 
 
 def ingest_chunks(chunks: list[str], metadatas: list[dict] = None):
-    """Indexa chunks en ChromaDB con embeddings de sentence-transformers."""
+    """Indexa chunks en ChromaDB con embeddings de Gemini."""
     client = _get_client()
 
     # Eliminar colección existente si hay
@@ -73,7 +71,7 @@ def ingest_chunks(chunks: list[str], metadatas: list[dict] = None):
         embeddings = _embed(batch)
         col.add(documents=batch, embeddings=embeddings, ids=ids, metadatas=metas)
 
-    logger.info(f"Ingesta completa: {col.count()} chunks con embeddings {EMBED_MODEL}")
+    logger.info(f"Ingesta completa: {col.count()} chunks con Gemini text-embedding-004")
     return col.count()
 
 
