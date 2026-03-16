@@ -7,7 +7,7 @@ import re
 import sys
 from dotenv import load_dotenv
 
-load_dotenv()  # En Railway no hay .env pero tampoco falla
+load_dotenv(override=True)  # override=True para que .env gane sobre env vars del sistema
 
 _cfg_logger = logging.getLogger(__name__)
 
