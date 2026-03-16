@@ -495,6 +495,7 @@ def _build_full_prompt(
     weather_block = format_weather(weather) if weather.get("ok") else ""
 
     tdee = int(profile_dict.get("tdee", "0") or "0")
+    nickname = (settings or {}).get("nickname", "") or profile_dict.get("name", "usuario")
     system_prompt = _build_system_prompt(profile_dict, settings)
     caloric_block = _build_caloric_context(
         fecha_hora, today_meals or "Ninguna registrada aun.", total_hoy, tdee
@@ -509,9 +510,14 @@ def _build_full_prompt(
     if history:
         hist_lines = []
         for turn in history[-20:]:
-            role = turn["role"].upper() if turn["role"] in ("user", "assistant") else "USER"
-            hist_lines.append(f"{role}: {turn['content']}")
-        parts.append("=== CONVERSACION RECIENTE ===\n" + "\n".join(hist_lines))
+            label = f"[{nickname}]" if turn["role"] == "user" else "[Nutribot]"
+            hist_lines.append(f"{label} {turn['content']}")
+        parts.append(
+            "=== CONVERSACION RECIENTE ===\n"
+            "(Solo usa esto como contexto. NO repitas estas etiquetas en tu respuesta. "
+            "NO inventes cosas que el usuario no dijo.)\n"
+            + "\n".join(hist_lines)
+        )
 
     parts.append(f"=== MENSAJE ACTUAL DEL USUARIO ===\n{user_message}")
 
