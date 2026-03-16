@@ -74,7 +74,7 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-NUTRITION_GUIDE_PATH = os.getenv("NUTRITION_GUIDE_PATH", "./data/nutrition_guide.txt")
+NUTRITION_GUIDE_PATH = os.getenv("NUTRITION_GUIDE_PATH", "./knowledge/nutrition_guide.txt")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "./data/nathalie.db")
 MEDIA_PATH = os.getenv("MEDIA_PATH", "./media/stickers")

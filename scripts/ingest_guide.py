@@ -17,6 +17,7 @@ from config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
 from rag.vector_store import ingest_chunks
 
 DATA_DIR = Path("./data")
+KNOWLEDGE_DIR = Path("./knowledge")
 VALID_EXTENSIONS = {".txt", ".md", ".pdf"}
 
 
@@ -51,14 +52,46 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 
 def discover_files() -> list[Path]:
-    """Encuentra todos los archivos indexables en data/."""
-    if not DATA_DIR.exists():
-        return []
-    files = [
-        f for f in DATA_DIR.iterdir()
-        if f.is_file() and f.suffix in VALID_EXTENSIONS
-    ]
-    return sorted(files)
+    """Encuentra todos los archivos indexables en knowledge/ y data/."""
+    files = []
+    for d in (KNOWLEDGE_DIR, DATA_DIR):
+        if d.exists():
+            files.extend(
+                f for f in d.iterdir()
+                if f.is_file() and f.suffix in VALID_EXTENSIONS
+            )
+    # Dedup por nombre (knowledge/ tiene prioridad)
+    seen = set()
+    unique = []
+    for f in files:
+        if f.name not in seen:
+            seen.add(f.name)
+            unique.append(f)
+    return sorted(unique)
+
+
+def ingest() -> int:
+    """Indexa todos los archivos de conocimiento. Retorna cantidad de chunks."""
+    files = discover_files()
+    if not files:
+        return 0
+
+    all_chunks = []
+    all_metadatas = []
+
+    for filepath in files:
+        text = read_file(str(filepath))
+        if not text:
+            continue
+        chunks = chunk_text(text, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP)
+        for i, chunk in enumerate(chunks):
+            all_chunks.append(chunk)
+            all_metadatas.append({"source": filepath.name, "chunk_idx": i})
+
+    if not all_chunks:
+        return 0
+
+    return ingest_chunks(chunks=all_chunks, metadatas=all_metadatas)
 
 
 def main():

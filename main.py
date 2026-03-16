@@ -63,10 +63,15 @@ def bootstrap() -> None:
         logger.info("No hay usuarios pre-configurados en .env (cualquiera puede usar /start)")
 
     if not is_populated():
-        logger.warning(
-            "ChromaDB vacío. Ejecuta primero: python scripts/ingest_guide.py\n"
-            "El bot funcionará sin RAG hasta que lo hagas."
-        )
+        logger.info("ChromaDB vacío — indexando guía nutricional...")
+        from scripts.ingest_guide import ingest
+        n = ingest()
+        if n > 0:
+            logger.info("Indexados %d chunks en ChromaDB", n)
+        else:
+            logger.warning("No se encontraron archivos para indexar en knowledge/ o data/")
+    else:
+        logger.info("ChromaDB ya tiene datos — OK")
 
 
 async def main() -> None:
